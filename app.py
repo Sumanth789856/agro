@@ -13,7 +13,7 @@ from werkzeug.utils import secure_filename
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
-import magic
+import mimetypes
 load_dotenv()
 
 app = Flask(__name__)
@@ -145,7 +145,8 @@ if not os.path.exists(UPLOAD_FOLDER):
 
 # Function to Check Allowed File Extensions
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and \
+           mimetypes.guess_type(filename)[0] in {'image/png', 'image/jpeg', 'image/gif'}
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -622,6 +623,5 @@ def my_posts():
 
 
 if __name__ == '__main__':
-    
-        app.run()
+    app.run(debug=True, port=8080)
 
