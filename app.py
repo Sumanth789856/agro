@@ -13,9 +13,6 @@ from werkzeug.utils import secure_filename
 import requests
 from datetime import datetime
 
-
-
-
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
