@@ -12,16 +12,19 @@ import joblib
 from werkzeug.utils import secure_filename 
 import requests
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'
+app.secret_key = os.getenv('SECRET_KEY')
 
 # Database Connection
 db = pymysql.connect(
-    host="localhost",
-    user="root",
-    password="7842909856a@A",
-    database="crop_db12"
+    host=os.getenv('DB_HOST'),
+    user=os.getenv('DB_USER'),
+    password=os.getenv('DB_PASSWORD'),
+    database=os.getenv('DB_NAME')
 )
 cursor = db.cursor()
 
@@ -616,30 +619,9 @@ def my_posts():
         user_comments[post[0]] = cursor.fetchall()
 
     return render_template('my_posts.html', posts=user_posts, comments=user_comments)
-def get_db_connection():
-    if os.getenv('FLASK_ENV') == 'production':
-        # Use production database URL
-        db_url = os.getenv('DATABASE_URL')
-        return pymysql.connect(
-            host=os.getenv('MYSQL_HOST'),
-            user=os.getenv('MYSQL_USER'),
-            password=os.getenv('MYSQL_PASSWORD'),
-            database=os.getenv('MYSQL_DATABASE')
-        )
-    else:
-        # Local development database
-        return pymysql.connect(
-            host="localhost",
-            user="root",
-            password="7842909856a@A",
-            database="crop_db12"
-        )
 
-
-    
 
 if __name__ == '__main__':
-    if os.getenv('FLASK_ENV') == 'production':
+    
         app.run()
-    else:
-      app.run(debug=True,port=5005)
+
