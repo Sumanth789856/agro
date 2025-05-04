@@ -13,7 +13,7 @@ from werkzeug.utils import secure_filename
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
-
+import magic
 load_dotenv()
 
 app = Flask(__name__)
