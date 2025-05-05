@@ -23,10 +23,10 @@ app.secret_key = os.getenv('SECRET_KEY', 'your_secret_key')
 db_pool = pool.SimpleConnectionPool(
     minconn=1,
     maxconn=10,
-    host=os.getenv('DB_HOST', 'localhost'),
+    host=os.getenv('DB_HOST', 'dpg-d0c48tadbo4c73da3s80-a.oregon-postgres.render.com'),
     database=os.getenv('DB_NAME', 'crop_db12'),
-    user=os.getenv('DB_USER', 'postgres'),
-    password=os.getenv('DB_PASSWORD', '7842909856a@A')
+    user=os.getenv('DB_USER', 'crop_db12_user'),
+    password=os.getenv('DB_PASSWORD', 'AJgvfPyV9RWFO7XYZq1znlHEBi8hqKzP')
 )
 
 @contextmanager
