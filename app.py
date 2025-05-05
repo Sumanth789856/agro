@@ -16,18 +16,21 @@ from datetime import datetime, timedelta
 import psycopg2
 from psycopg2 import pool
 from contextlib import contextmanager
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'
+app.secret_key = os.getenv('SECRET_KEY', 'your_secret_key')
 
 # Create a connection pool
 db_pool = pool.SimpleConnectionPool(
     minconn=1,
     maxconn=10,
-    host="localhost",
-    user="postgres",
-    password="7842909856a@A",
-    database="crop_db12"
+    host=os.getenv('DB_HOST', 'localhost'),
+    user=os.getenv('DB_USER', 'postgres'),
+    password=os.getenv('DB_PASSWORD', '7842909856a@A'),
+    database=os.getenv('DB_NAME', 'crop_db12')
 )
 
 @contextmanager
@@ -319,7 +322,7 @@ def contactus():
 
 @app.route('/detect', methods=['GET', 'POST'])
 def detect():
-    genai.configure(api_key='AIzaSyD0GWPhKt5sQk957ASwiNYz3BP-a4gLsXU')  # Key hardcoded
+    genai.configure(api_key=os.getenv('GEMINI_API_KEY'))  # Using environment variable
     model = genai.GenerativeModel('gemini-1.5-flash')
     if request.method == 'POST':
         if 'file' not in request.files:
