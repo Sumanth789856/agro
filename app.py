@@ -20,16 +20,16 @@ load_dotenv()  # Load environment variables
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your_secret_key')
-port = int(os.getenv("PORT", 5000))  # Add port configuration
+port = int(os.getenv("PORT", 10000))  # Update port configuration
 
 # Create a connection pool
 db_pool = pool.SimpleConnectionPool(
     minconn=1,
     maxconn=10,
-    host="localhost",
-    user="postgres",
-    password="7842909856a@A",
-    database="crop_db12"
+    host=os.getenv('DB_HOST', 'dpg-d0c48tadbo4c73da3s80-a.oregon-postgres.render.com'),
+    database=os.getenv('DB_NAME', 'crop_db12'),
+    user=os.getenv('DB_USER', 'crop_db12_user'),
+    password=os.getenv('DB_PASSWORD', 'AJgvfPyV9RWFO7XYZq1znlHEBi8hqKzP')
 )
 
 @contextmanager
