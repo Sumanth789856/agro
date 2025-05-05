@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash,jsonify
-import pymysql
+
 import pandas as pd
 import numpy as np
 import pickle
@@ -11,22 +11,46 @@ import os
 import joblib
 from werkzeug.utils import secure_filename 
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta 
 
-
-
+import psycopg2
+from psycopg2 import pool
+from contextlib import contextmanager
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
-# Database Connection
-db = pymysql.connect(
+# Create a connection pool
+db_pool = pool.SimpleConnectionPool(
+    minconn=1,
+    maxconn=10,
     host="localhost",
-    user="root",
+    user="postgres",
     password="7842909856a@A",
     database="crop_db12"
 )
-cursor = db.cursor()
+
+@contextmanager
+def get_db_connection():
+    conn = db_pool.getconn()
+    try:
+        yield conn
+    finally:
+        db_pool.putconn(conn)
+
+@contextmanager
+def get_db_cursor(commit=False):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            yield cursor
+            if commit:
+                conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
 
 # Load and train the ML model if not already trained
 try:
@@ -171,9 +195,9 @@ def register():
             file.save(file_path)
 
             # Store user details and profile picture filename in MySQL
-            cursor.execute("INSERT INTO users (name, email, password, profile_pic) VALUES (%s, %s, %s, %s)", 
-                           (name, email, password, filename))
-            db.commit()
+            with get_db_cursor(commit=True) as cursor:
+                cursor.execute("INSERT INTO users (name, email, password, profile_pic) VALUES (%s, %s, %s, %s)", 
+                               (name, email, password, filename))
 
             flash('Registration successful! Please log in.')
             return redirect(url_for('login'))
@@ -188,8 +212,9 @@ def login():
         email = request.form['email']
         password = request.form['password']
 
-        cursor.execute("SELECT id, name, profile_pic FROM users WHERE email = %s AND password = %s", (email, password))
-        user = cursor.fetchone()
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT id, name, profile_pic FROM users WHERE email = %s AND password = %s", (email, password))
+            user = cursor.fetchone()
 
         if user:
             session['user_id'] = user[0]
@@ -206,6 +231,7 @@ def login():
 def predict():
     if 'user_id' in session:
         if request.method == 'POST':
+            # Get form data
             n = float(request.form['n'])
             p = float(request.form['p'])
             k = float(request.form['k'])
@@ -218,30 +244,31 @@ def predict():
             features = [[n, p, k, temperature, humidity, ph, rainfall]]
             predicted_crop = crop_model.predict(features)[0]
 
-            # Save prediction to database
-            user_id = session['user_id']
-            cursor = db.cursor()
-            insert_query = """
-                INSERT INTO predictions (user_id, n, p, k, temperature, humidity, ph, rainfall, predicted_crop)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            cursor.execute(insert_query, (user_id, n, p, k, temperature, humidity, ph, rainfall, predicted_crop))
-            db.commit()
+            # Store prediction in database
+            with get_db_cursor(commit=True) as cursor:
+                cursor.execute(
+                    "INSERT INTO predictions (user_id, nitrogen, phosphorus, potassium, temperature, humidity, ph, rainfall, predicted_crop) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (session['user_id'], n, p, k, temperature, humidity, ph, rainfall, predicted_crop)
+                )
 
-            # Crop images dictionary
+            # Crop dictionary
             crop_images = {
                 'rice': 'crop_images/rice.png',
                 'wheat': 'crop_images/wheat.png',
                 'maize': 'crop_images/maize.jpeg',
                 'apple': 'crop_images/apple.jpg',
-                'Barley': 'crop_images/Barley.jpg',
+                'barley': 'crop_images/Barley.jpg',
                 'banana': 'crop_images/banana.jpeg',
                 'chickpea': 'crop_images/chickpea.jpg',
                 'coconut': 'crop_images/coconut.jpg',
                 'coffee': 'crop_images/coffee.jpg',
                 'cotton': 'crop_images/cotton.jpeg',
                 'grapes': 'crop_images/grapes.jpeg',
-                'jute': 'crop_images/jute.jpeg',
+                'sugarcane': 'crop_images/Sugarcane.png',
+                'chili': 'crop_images/Chili.png',
+                'potato': 'crop_images/Potato.png',
+                'tomato': 'crop_images/Tomato.png',
+                'soybean': 'crop_images/Soybean.png',
                 'kidneybeans': 'crop_images/kidneybeans.jpeg',
                 'lentil': 'crop_images/lentil.jpeg',
                 'mango': 'crop_images/mango.jpeg',
@@ -251,14 +278,20 @@ def predict():
                 'orange': 'crop_images/orange.jpeg',
                 'papaya': 'crop_images/papaya.jpeg',
                 'pigeonpeas': 'crop_images/pigeonpeas.jpeg',
-                'pomergranate': 'crop_images/pomergranate.jpg',
+                'pomegranate': 'crop_images/pomergranate.jpg',
                 'watermelon': 'crop_images/watermelon.jpg'
             }
 
             crop_image = crop_images.get(predicted_crop, 'crop_images/default.jpg')
 
-            return render_template('result1.html', crop=predicted_crop, crop_image=crop_image)
-
+            return render_template('result1.html', 
+                                crop=predicted_crop, 
+                                crop_image=crop_image,
+                                n=n, p=p, k=k,
+                                temperature=temperature,
+                                humidity=humidity,
+                                ph=ph,
+                                rainfall=rainfall)
         return render_template('predict.html')
     return redirect(url_for('login'))
 
@@ -274,8 +307,8 @@ def contactus():
         message = request.form['message']
         
         # Store user details in the database
-        cursor.execute("INSERT INTO contact1 (name, email, message) VALUES (%s, %s, %s)", (name, email, message))
-        db.commit()
+        with get_db_cursor(commit=True) as cursor:
+            cursor.execute("INSERT INTO contact1 (name, email, message) VALUES (%s, %s, %s)", (name, email, message))
         flash('Thank you for reaching out! We will get back to you soon.')
         return redirect(url_for('contactus'))
     return render_template('contactus.html')
@@ -286,9 +319,8 @@ def contactus():
 
 @app.route('/detect', methods=['GET', 'POST'])
 def detect():
-    genai.configure(api_key='AIzaSyD0GWPhKt5sQk957ASwiNYz3BP-a4gLsXU')  # Key hardcoded (move to .env in production)
+    genai.configure(api_key='AIzaSyD0GWPhKt5sQk957ASwiNYz3BP-a4gLsXU')  # Key hardcoded
     model = genai.GenerativeModel('gemini-1.5-flash')
-
     if request.method == 'POST':
         if 'file' not in request.files:
             return redirect(request.url)
@@ -298,6 +330,7 @@ def detect():
             return redirect(request.url)
         
         if file:
+            # Secure file handling
             from werkzeug.utils import secure_filename
             filename = secure_filename(file.filename)
             upload_dir = os.path.join('static', 'uploads')
@@ -318,6 +351,7 @@ def detect():
                     genai.upload_file(img_path)
                 ])
 
+                # Parse response
                 result_data = {
                     'crop': 'Unknown Crop',
                     'disease': 'No Disease Detected',
@@ -342,23 +376,6 @@ def detect():
                             result_data['recommendations'] = recommendations
                             break
 
-                # Store analysis result into database
-                cursor = db.cursor()
-                insert_query = """
-                    INSERT INTO disease_detections 
-                    (user_id, crop, disease, recommendations, image_path) 
-                    VALUES (%s, %s, %s, %s, %s)
-                """
-                cursor.execute(insert_query, (
-                    session['user_id'],
-                    result_data['crop'],
-                    result_data['disease'],
-                    '\n'.join(result_data['recommendations']),
-                    img_path
-                ))
-                db.commit()
-                cursor.close()
-
                 return render_template(
                     'interactive_result.html',
                     **result_data,
@@ -372,8 +389,8 @@ def detect():
                     recovery_tip="Try uploading a clearer image of the crop leaves"
                 )
 
+    # GET request or failed POST
     return render_template('detect.html')
-
 
 @app.route('/logout')
 def logout():
@@ -415,18 +432,16 @@ def rotation():
                 predicted_next_crop = label_encoders['Preferred Next Crop'].inverse_transform([predicted_crop_encoded])[0]
 
                 # Insert into DB
-                cursor = db.cursor()
-                insert_query = """
-                    INSERT INTO crop_rotations 
-                    (user_id, crop_name, n, p, k, soil_type, season, temperature, rainfall, humidity, predicted_next_crop)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """
-                cursor.execute(insert_query, (
-                    session['user_id'], crop_name, n, p, k, soil_type, season,
-                    temperature, rainfall, humidity, predicted_next_crop
-                ))
-                db.commit()
-                cursor.close()
+                with get_db_cursor(commit=True) as cursor:
+                    insert_query = """
+                        INSERT INTO crop_rotations 
+                        (user_id, crop_name, n, p, k, soil_type, season, temperature, rainfall, humidity, predicted_next_crop)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """
+                    cursor.execute(insert_query, (
+                        session['user_id'], crop_name, n, p, k, soil_type, season,
+                        temperature, rainfall, humidity, predicted_next_crop
+                    ))
 
                 # Normalize crop name for image matching
                 predicted_next_crop_lower = predicted_next_crop.lower().replace(" ", "")
@@ -483,54 +498,67 @@ def rotation():
         return render_template('rotation.html')
 
     return redirect(url_for('login'))
-
-
 @app.route('/create_post', methods=['POST'])
 def create_post():
     if 'user_id' not in session:
         return redirect(url_for('login'))
 
-    user_id = session['user_id']
-    content = request.form.get('content')
-    image = request.files.get('image')
+    try:
+        with get_db_cursor(commit=True) as cursor:
+            user_id = session['user_id']
+            content = request.form.get('content')
+            image = request.files.get('image')
 
-    image_filename = None
-    if image and allowed_file(image.filename):
-        image_filename = secure_filename(image.filename)
-        image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
-        image.save(image_path)
+            image_filename = None
+            if image and allowed_file(image.filename):
+                image_filename = secure_filename(image.filename)
+                image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
+                image.save(image_path)
 
-    # Insert into MySQL
-    cursor.execute("INSERT INTO posts (user_id, content, image) VALUES (%s, %s, %s)", 
-                   (user_id, content, image_filename))
-    db.commit()
+            cursor.execute(
+                "INSERT INTO posts (user_id, content, image) VALUES (%s, %s, %s)", 
+                (user_id, content, image_filename)
+            )
 
-    return redirect(url_for('community'))
+        return redirect(url_for('community'))
+    
+    except Exception as e:
+        print(f"Database error: {e}")
+        flash("An error occurred while creating the post.")
+        return redirect(url_for('community'))
+
 @app.route('/community')
 def community():
-    cursor.execute("""
-        SELECT posts.id, users.name, posts.content, posts.image, posts.created_at, 
-               COALESCE(users.profile_pic, 'default_profile.png') AS profile_picture,
-               (SELECT COUNT(*) FROM likes WHERE likes.post_id = posts.id) AS like_count
-        FROM posts 
-        JOIN users ON posts.user_id = users.id 
-        ORDER BY posts.created_at DESC
-    """)
-    posts = cursor.fetchall()
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                SELECT posts.id, users.name, posts.content, posts.image, posts.created_at, 
+                       COALESCE(users.profile_pic, 'default_profile.png') AS profile_picture,
+                       (SELECT COUNT(*) FROM likes WHERE likes.post_id = posts.id) AS like_count
+                FROM posts 
+                JOIN users ON posts.user_id = users.id 
+                ORDER BY posts.created_at DESC
+            """)
+            posts = cursor.fetchall()
 
-    # Fetch comments for each post
-    comments = {}
-    for post in posts:
-        cursor.execute("""
-            SELECT comments.comment, users.name, users.profile_pic 
-            FROM comments 
-            JOIN users ON comments.user_id = users.id 
-            WHERE comments.post_id = %s
-            ORDER BY comments.created_at ASC
-        """, (post[0],))
-        comments[post[0]] = cursor.fetchall()
+            # Fetch comments for each post
+            comments = {}
+            for post in posts:
+                cursor.execute("""
+                    SELECT comments.comment, users.name, users.profile_pic 
+                    FROM comments 
+                    JOIN users ON comments.user_id = users.id 
+                    WHERE comments.post_id = %s
+                    ORDER BY comments.created_at ASC
+                """, (post[0],))
+                comments[post[0]] = cursor.fetchall()
 
-    return render_template('community.html', posts=posts, comments=comments)
+        return render_template('community.html', posts=posts, comments=comments)
+    
+    except Exception as e:
+        print(f"Database error: {e}")
+        flash("An error occurred while loading the community page.")
+        return redirect(url_for('home'))
 
 @app.route('/like/<int:post_id>', methods=['POST'])
 def like_post(post_id):
@@ -539,15 +567,22 @@ def like_post(post_id):
 
     user_id = session['user_id']
     
-    # Check if the user already liked the post
-    cursor.execute("SELECT * FROM likes WHERE user_id = %s AND post_id = %s", (user_id, post_id))
-    existing_like = cursor.fetchone()
+    try:
+        with get_db_cursor(commit=True) as cursor:
+            # Check if the user already liked the post
+            cursor.execute("SELECT * FROM likes WHERE user_id = %s AND post_id = %s", (user_id, post_id))
+            existing_like = cursor.fetchone()
 
-    if not existing_like:
-        cursor.execute("INSERT INTO likes (user_id, post_id) VALUES (%s, %s)", (user_id, post_id))
-        db.commit()
+            if not existing_like:
+                cursor.execute("INSERT INTO likes (user_id, post_id) VALUES (%s, %s)", (user_id, post_id))
 
-    return redirect(url_for('community'))
+        return redirect(url_for('community'))
+    
+    except Exception as e:
+        print(f"Database error: {e}")
+        flash("An error occurred while liking the post.")
+        return redirect(url_for('community'))
+
 @app.route('/comment/<int:post_id>', methods=['POST'])
 def comment_post(post_id):
     if 'user_id' not in session:
@@ -557,11 +592,17 @@ def comment_post(post_id):
     comment_text = request.form['comment']
 
     if comment_text.strip():
-        cursor.execute("INSERT INTO comments (user_id, post_id, comment) VALUES (%s, %s, %s)", 
-                       (user_id, post_id, comment_text))
-        db.commit()
+        try:
+            with get_db_cursor(commit=True) as cursor:
+                cursor.execute("INSERT INTO comments (user_id, post_id, comment) VALUES (%s, %s, %s)", 
+                               (user_id, post_id, comment_text))
+            return redirect(url_for('community'))
+        
+        except Exception as e:
+            print(f"Database error: {e}")
+            flash("An error occurred while adding the comment.")
+            return redirect(url_for('community'))
 
-    return redirect(url_for('community'))
 import os
 
 @app.route('/delete_post/<int:post_id>', methods=['POST'])
@@ -569,21 +610,26 @@ def delete_post(post_id):
     if 'user_id' not in session:
         return redirect(url_for('login'))
 
-    # Fetch the image filename before deleting the post
-    cursor.execute("SELECT content FROM posts WHERE id = %s", (post_id,))
-    post = cursor.fetchone()
+    try:
+        with get_db_cursor(commit=True) as cursor:
+            # Fetch the image filename before deleting the post
+            cursor.execute("SELECT content FROM posts WHERE id = %s", (post_id,))
+            post = cursor.fetchone()
 
-    if post and post[0]:  # If the post exists and has an image
-        image_path = os.path.join(app.config['UPLOAD_FOLDER'], post[0])
-        if os.path.exists(image_path):  # Check if the file exists
-            os.remove(image_path)  # Delete the file
+            if post and post[0]:  # If the post exists and has an image
+                image_path = os.path.join(app.config['UPLOAD_FOLDER'], post[0])
+                if os.path.exists(image_path):  # Check if the file exists
+                    os.remove(image_path)  # Delete the file
 
-    # Delete the post from the database
-    cursor.execute("DELETE FROM posts WHERE id = %s", (post_id,))
-   # cursor.execute("DELETE FROM comments WHERE post_id = %s", (post_id,))
-    db.commit()
+            # Delete the post from the database
+            cursor.execute("DELETE FROM posts WHERE id = %s", (post_id,))
 
-    return redirect(url_for('community'))
+        return redirect(url_for('community'))
+    
+    except Exception as e:
+        print(f"Database error: {e}")
+        flash("An error occurred while deleting the post.")
+        return redirect(url_for('community'))
 
 
 @app.route('/my_posts')
@@ -593,35 +639,40 @@ def my_posts():
     
     user_id = session['user_id']
 
-    # Fetch the logged-in user's posts
-    cursor.execute("""
-        SELECT posts.id, users.name, posts.content, posts.image, posts.created_at, 
-               COALESCE(users.profile_pic, 'default_profile.png') AS profile_picture,
-               (SELECT COUNT(*) FROM likes WHERE likes.post_id = posts.id) AS like_count
-        FROM posts 
-        JOIN users ON posts.user_id = users.id 
-        WHERE posts.user_id = %s
-        ORDER BY posts.created_at DESC
-    """, (user_id,))
+    try:
+        with get_db_cursor() as cursor:
+            # Fetch the logged-in user's posts
+            cursor.execute("""
+                SELECT posts.id, users.name, posts.content, posts.image, posts.created_at, 
+                       COALESCE(users.profile_pic, 'default_profile.png') AS profile_picture,
+                       (SELECT COUNT(*) FROM likes WHERE likes.post_id = posts.id) AS like_count
+                FROM posts 
+                JOIN users ON posts.user_id = users.id 
+                WHERE posts.user_id = %s
+                ORDER BY posts.created_at DESC
+            """, (user_id,))
+            
+            user_posts = cursor.fetchall()
+
+            # Fetch comments for each post
+            user_comments = {}
+            for post in user_posts:
+                cursor.execute("""
+                    SELECT comments.comment, users.name, users.profile_pic 
+                    FROM comments 
+                    JOIN users ON comments.user_id = users.id 
+                    WHERE comments.post_id = %s
+                    ORDER BY comments.created_at ASC
+                """, (post[0],))
+                user_comments[post[0]] = cursor.fetchall()
+
+        return render_template('my_posts.html', posts=user_posts, comments=user_comments)
     
-    user_posts = cursor.fetchall()
+    except Exception as e:
+        print(f"Database error: {e}")
+        flash("An error occurred while loading your posts.")
+        return redirect(url_for('home'))
 
-    # Fetch comments for each post
-    user_comments = {}
-    for post in user_posts:
-        cursor.execute("""
-            SELECT comments.comment, users.name, users.profile_pic 
-            FROM comments 
-            JOIN users ON comments.user_id = users.id 
-            WHERE comments.post_id = %s
-            ORDER BY comments.created_at ASC
-        """, (post[0],))
-        user_comments[post[0]] = cursor.fetchall()
-
-    return render_template('my_posts.html', posts=user_posts, comments=user_comments)
-
-
-    
 
 if __name__ == '__main__':
-      app.run(debug=True,port=5005)
+    app.run(debug=True,port=5001)
