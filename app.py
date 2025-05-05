@@ -20,7 +20,7 @@ load_dotenv()  # Load environment variables
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your_secret_key')
-port = int(os.getenv("PORT", 10000))  # Update port configuration
+
 
 # Create a connection pool
 db_pool = pool.SimpleConnectionPool(
@@ -676,5 +676,5 @@ def my_posts():
         return redirect(url_for('home'))
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=port)
+if __name__ == '__main__': 
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
