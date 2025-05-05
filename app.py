@@ -348,62 +348,81 @@ def contactus():
 
 @app.route('/detect', methods=['GET', 'POST'])
 def detect():
-    genai.configure(api_key='AIzaSyD0GWPhKt5sQk957ASwiNYz3BP-a4gLsXU')  # Key hardcoded
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Configure Gemini - better to use environment variable
+    genai.configure(api_key=os.getenv('GEMINI_API_KEY', 'AIzaSyD0GWPhKt5sQk957ASwiNYz3BP-a4gLsXU'))
+    model = genai.GenerativeModel('gemini-pro-vision')  # Use vision model
+
     if request.method == 'POST':
         if 'file' not in request.files:
+            flash('No file uploaded')
             return redirect(request.url)
         
         file = request.files['file']
         if file.filename == '':
+            flash('No selected file')
             return redirect(request.url)
         
         if file:
-            # Secure file handling
-            from werkzeug.utils import secure_filename
-            filename = secure_filename(file.filename)
-            upload_dir = os.path.join('static', 'uploads')
-            os.makedirs(upload_dir, exist_ok=True)
-            img_path = os.path.join(upload_dir, filename)
-            file.save(img_path)
-
             try:
+                # Secure file handling
+                filename = secure_filename(file.filename)
+                upload_dir = os.path.join('static', 'uploads')
+                os.makedirs(upload_dir, exist_ok=True)
+                img_path = os.path.join(upload_dir, filename)
+                file.save(img_path)
+
+                # Read image as bytes
+                with open(img_path, 'rb') as img_file:
+                    img_bytes = img_file.read()
+
                 # Generate analysis with Gemini
+                prompt = """Analyze this crop image and provide the following in MARKDOWN format:
+                **Crop Name:** <crop>
+                **Disease:** <disease or "Healthy">
+                **Confidence:** <confidence percentage>
+                **Recommendations:**
+                - <list of treatments>
+                - <prevention methods>
+                Include relevant emojis where appropriate."""
+
                 response = model.generate_content([
-                    "Analyze this crop image and provide the following in MARKDOWN format:\n"
-                    "**Crop Name:** <crop>\n"
-                    "**Disease:** <disease>\n"
-                    "**Recommendations:**\n"
-                    "- <list of pesticides>\n"
-                    "- <prevention methods>\n\n"
-                    "Include emojis where appropriate 🌱🌾",
-                    genai.upload_file(img_path)
+                    prompt,
+                    {"mime_type": "image/jpeg", "data": img_bytes}
                 ])
 
-                # Parse response
+                # Default result structure
                 result_data = {
                     'crop': 'Unknown Crop',
-                    'disease': 'No Disease Detected',
-                    'recommendations': ['No recommendations available'],
+                    'disease': 'Healthy',
+                    'confidence': 'N/A',
+                    'recommendations': ['No specific recommendations'],
                     'image': img_path,
-                    'status_icon': '⚠️'
+                    'status_icon': '✅',
+                    'analysis': response.text
                 }
 
+                # Parse the response if in expected format
                 if response.text:
-                    content = response.text.split('\n')
-                    for line in content:
-                        if '**Crop Name:**' in line:
-                            result_data['crop'] = line.split('**Crop Name:**')[-1].strip()
-                        elif '**Disease:**' in line:
-                            result_data['disease'] = line.split('**Disease:**')[-1].strip()
-                            result_data['status_icon'] = '✅' if 'No Disease' in result_data['disease'] else '⚠️'
-                        elif '**Recommendations:**' in line:
-                            recommendations = []
-                            for item in content[content.index(line)+1:]:
-                                if item.strip().startswith('-'):
-                                    recommendations.append(item.strip()[1:].strip())
-                            result_data['recommendations'] = recommendations
-                            break
+                    analysis_text = response.text
+                    result_data['analysis'] = analysis_text
+                    
+                    # Try to extract structured data
+                    try:
+                        if '**Crop Name:**' in analysis_text:
+                            result_data['crop'] = analysis_text.split('**Crop Name:**')[1].split('\n')[0].strip()
+                        if '**Disease:**' in analysis_text:
+                            disease_part = analysis_text.split('**Disease:**')[1].split('\n')[0].strip()
+                            result_data['disease'] = disease_part
+                            result_data['status_icon'] = '⚠️' if disease_part.lower() != 'healthy' else '✅'
+                        if '**Confidence:**' in analysis_text:
+                            result_data['confidence'] = analysis_text.split('**Confidence:**')[1].split('\n')[0].strip()
+                        if '**Recommendations:**' in analysis_text:
+                            recs = analysis_text.split('**Recommendations:**')[1].strip().split('\n')
+                            result_data['recommendations'] = [r[2:].strip() for r in recs if r.startswith('- ')]
+                    except Exception as parse_error:
+                        print(f"Error parsing response: {parse_error}")
+                        # Fall back to showing full analysis if parsing fails
+                        result_data['recommendations'] = [f"Full analysis: {analysis_text}"]
 
                 return render_template(
                     'interactive_result.html',
@@ -412,13 +431,17 @@ def detect():
                 )
 
             except Exception as e:
+                print(f"Error during analysis: {str(e)}")
+                # Clean up the uploaded file if error occurs
+                if os.path.exists(img_path):
+                    os.remove(img_path)
+                    
                 return render_template(
                     'error.html',
-                    error_message=f"Analysis failed: {str(e)}",
-                    recovery_tip="Try uploading a clearer image of the crop leaves"
+                    error_message="Analysis failed. Please try again.",
+                    recovery_tip="Ensure you have a stable internet connection and try uploading a clearer image."
                 )
 
-    # GET request or failed POST
     return render_template('detect.html')
 
 @app.route('/logout')
