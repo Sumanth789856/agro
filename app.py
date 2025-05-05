@@ -11,9 +11,7 @@ import os
 import joblib
 from werkzeug.utils import secure_filename 
 import requests
-from datetime import datetime, timedelta 
-
-import psycopg2
+from datetime import datetime
 from psycopg2 import pool
 from contextlib import contextmanager
 from dotenv import load_dotenv
@@ -22,15 +20,16 @@ load_dotenv()  # Load environment variables
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your_secret_key')
+port = int(os.getenv("PORT", 5000))  # Add port configuration
 
 # Create a connection pool
 db_pool = pool.SimpleConnectionPool(
     minconn=1,
     maxconn=10,
-    host=os.getenv('DB_HOST', 'localhost'),
-    user=os.getenv('DB_USER', 'postgres'),
-    password=os.getenv('DB_PASSWORD', '7842909856a@A'),
-    database=os.getenv('DB_NAME', 'crop_db12')
+    host="localhost",
+    user="postgres",
+    password="7842909856a@A",
+    database="crop_db12"
 )
 
 @contextmanager
@@ -322,7 +321,7 @@ def contactus():
 
 @app.route('/detect', methods=['GET', 'POST'])
 def detect():
-    genai.configure(api_key=os.getenv('GEMINI_API_KEY'))  # Using environment variable
+    genai.configure(api_key='AIzaSyD0GWPhKt5sQk957ASwiNYz3BP-a4gLsXU')  # Key hardcoded
     model = genai.GenerativeModel('gemini-1.5-flash')
     if request.method == 'POST':
         if 'file' not in request.files:
@@ -678,4 +677,4 @@ def my_posts():
 
 
 if __name__ == '__main__':
-    app.run(debug=True,port=5001)
+    app.run(host='0.0.0.0', port=port)
