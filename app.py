@@ -1,28 +1,25 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash,jsonify
-
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 import pandas as pd
 import numpy as np
 import pickle
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from flask import request, render_template
-import google.generativeai as genai
-import os
 import joblib
 from werkzeug.utils import secure_filename 
+import os
 import requests
 from datetime import datetime
+import google.generativeai as genai
+from dotenv import load_dotenv
 from psycopg2 import pool
 from contextlib import contextmanager
-from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your_secret_key')
 
-
-# Create a connection pool
+# Database connection pool setup
 db_pool = pool.SimpleConnectionPool(
     minconn=1,
     maxconn=10,
@@ -54,20 +51,50 @@ def get_db_cursor(commit=False):
         finally:
             cursor.close()
 
-# Load and train the ML model if not already trained
-try:
-    with open('models/crop_model.pkl', 'rb') as file:
-        crop_model = pickle.load(file)
-except FileNotFoundError:
-    # Train model if it doesn't exist
-    df = pd.read_csv('models/crop_data.csv')
-    X = df[['N', 'P', 'K', 'temperature', 'humidity', 'ph', 'rainfall']]
-    y = df['label']
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    crop_model = RandomForestClassifier()
-    crop_model.fit(X_train, y_train)
-    with open('models/crop_model.pkl', 'wb') as file:
-        pickle.dump(crop_model, file)
+# Improved model loading with error handling
+def load_or_train_model():
+    model_path = 'models/crop_model.pkl'
+    data_path = 'models/crop_data.csv'
+    
+    try:
+        # First try loading with joblib (better for scikit-learn models)
+        model = joblib.load(model_path)
+        print("Model loaded successfully with joblib")
+        return model
+    except Exception as e:
+        print(f"Joblib load failed: {e}. Trying pickle...")
+        try:
+            # Fallback to pickle with numpy compatibility workaround
+            import sys
+            if 'numpy._core' not in sys.modules:
+                sys.modules['numpy._core'] = np.core
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+            print("Model loaded successfully with pickle")
+            return model
+        except Exception as e:
+            print(f"Pickle load failed: {e}. Training new model...")
+            try:
+                df = pd.read_csv(data_path)
+                X = df[['N', 'P', 'K', 'temperature', 'humidity', 'ph', 'rainfall']]
+                y = df['label']
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                model = RandomForestClassifier()
+                model.fit(X_train, y_train)
+                
+                # Save with both joblib and pickle for future compatibility
+                joblib.dump(model, model_path)
+                with open(model_path, 'wb') as f:
+                    pickle.dump(model, f)
+                
+                print("New model trained and saved")
+                return model
+            except Exception as e:
+                print(f"Model training failed: {e}")
+                raise RuntimeError("Failed to load or train model")
+
+# Load the model when starting the app
+crop_model = load_or_train_model()
         
 @app.route('/')
 def landing():
