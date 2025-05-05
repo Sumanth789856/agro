@@ -13,7 +13,8 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 from psycopg2 import pool
 from contextlib import contextmanager
-
+import io
+from PIL import Image
 load_dotenv()  # Load environment variables
 
 app = Flask(__name__)
@@ -344,82 +345,138 @@ def contactus():
 # Configure Gemini
 
 
-genai.configure(api_key='AIzaSyD0GWPhKt5sQk957ASwiNYz3BP-a4gLsXU')  # Key hardcoded
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Configure Gemini AI (should be at module level, not in route)
+try:
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyD0GWPhKt5sQk957ASwiNYz3BP-a4gLsXU').strip()
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    print(f"Failed to initialize Gemini: {e}")
+    gemini_model = None
 
 @app.route('/detect', methods=['GET', 'POST'])
 def detect():
-    
     if request.method == 'POST':
+        # Validate file upload
         if 'file' not in request.files:
+            flash('No file uploaded')
             return redirect(request.url)
         
         file = request.files['file']
         if file.filename == '':
+            flash('No selected file')
             return redirect(request.url)
         
-        if file:
-            # Secure file handling
-            from werkzeug.utils import secure_filename
-            filename = secure_filename(file.filename)
-            upload_dir = os.path.join('static', 'uploads')
-            os.makedirs(upload_dir, exist_ok=True)
-            img_path = os.path.join(upload_dir, filename)
-            file.save(img_path)
+        if not file.content_type.startswith('image/'):
+            flash('Please upload an image file')
+            return redirect(request.url)
 
+        if file and gemini_model:
             try:
-                # Generate analysis with Gemini
-                response = model.generate_content([
-                    "Analyze this crop image and provide the following in MARKDOWN format:\n"
-                    "**Crop Name:** <crop>\n"
-                    "**Disease:** <disease>\n"
-                    "**Recommendations:**\n"
-                    "- <list of pesticides>\n"
-                    "- <prevention methods>\n\n"
-                    "Include emojis where appropriate 🌱🌾",
-                    genai.upload_file(img_path)
+                # Secure file handling
+                filename = secure_filename(file.filename)
+                upload_dir = os.path.join('static', 'uploads')
+                os.makedirs(upload_dir, exist_ok=True)
+                img_path = os.path.join(upload_dir, filename)
+                file.save(img_path)
+
+                # Process image for Gemini
+                img = Image.open(img_path)
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format='JPEG')
+                img_bytes = img_byte_arr.getvalue()
+
+                # Generate analysis with improved prompt
+                prompt = """Analyze this crop image and provide detailed information in MARKDOWN format:
+
+**Crop Name:** [Identify the crop species]
+**Health Status:** [Healthy/Diseased/Stressed]
+**Disease/Issue:** [Specific disease or problem if any]
+**Confidence Level:** [High/Medium/Low]
+
+**Recommendations:**
+- [Treatment options]
+- [Prevention methods]
+- [Care instructions]
+
+**Additional Notes:**
+[Any other relevant observations]
+
+Include appropriate emojis for better readability."""
+
+                response = gemini_model.generate_content([
+                    prompt,
+                    {"mime_type": "image/jpeg", "data": img_bytes}
                 ])
 
-                # Parse response
+                # Parse response with improved logic
                 result_data = {
-                    'crop': 'Unknown Crop',
-                    'disease': 'No Disease Detected',
-                    'recommendations': ['No recommendations available'],
+                    'crop': 'Unknown',
+                    'status': 'Unknown',
+                    'disease': 'None detected',
+                    'confidence': 'N/A',
+                    'recommendations': [],
+                    'notes': '',
                     'image': img_path,
-                    'status_icon': '⚠️'
+                    'status_icon': '❓'
                 }
 
                 if response.text:
-                    content = response.text.split('\n')
-                    for line in content:
-                        if '**Crop Name:**' in line:
-                            result_data['crop'] = line.split('**Crop Name:**')[-1].strip()
-                        elif '**Disease:**' in line:
-                            result_data['disease'] = line.split('**Disease:**')[-1].strip()
-                            result_data['status_icon'] = '✅' if 'No Disease' in result_data['disease'] else '⚠️'
-                        elif '**Recommendations:**' in line:
-                            recommendations = []
-                            for item in content[content.index(line)+1:]:
-                                if item.strip().startswith('-'):
-                                    recommendations.append(item.strip()[1:].strip())
-                            result_data['recommendations'] = recommendations
-                            break
+                    analysis = response.text
+                    result_data['raw_analysis'] = analysis  # For debugging
 
-                return render_template(
-                    'interactive_result.html',
-                    **result_data,
-                    original_filename=filename
-                )
+                    # Extract information using more robust parsing
+                    sections = {
+                        'crop': extract_markdown_section(analysis, 'Crop Name'),
+                        'status': extract_markdown_section(analysis, 'Health Status'),
+                        'disease': extract_markdown_section(analysis, 'Disease/Issue'),
+                        'confidence': extract_markdown_section(analysis, 'Confidence Level'),
+                        'recommendations': extract_list_items(analysis, 'Recommendations'),
+                        'notes': extract_markdown_section(analysis, 'Additional Notes')
+                    }
+
+                    # Update result data
+                    result_data.update(sections)
+                    
+                    # Set appropriate status icon
+                    if 'healthy' in result_data['status'].lower():
+                        result_data['status_icon'] = '✅'
+                    elif 'diseased' in result_data['status'].lower():
+                        result_data['status_icon'] = '⚠️'
+                    elif 'stressed' in result_data['status'].lower():
+                        result_data['status_icon'] = '🌡️'
+
+                return render_template('interactive_result.html', **result_data)
 
             except Exception as e:
+                # Clean up file if error occurs
+                if os.path.exists(img_path):
+                    os.remove(img_path)
+                    
                 return render_template(
                     'error.html',
-                    error_message=f"Analysis failed: {str(e)}",
+                    error_message="Analysis failed. Please try again.",
                     recovery_tip="Try uploading a clearer image of the crop leaves"
                 )
+        else:
+            flash('AI service is currently unavailable')
+            return redirect(request.url)
 
-    # GET request or failed POST
     return render_template('detect.html')
+
+# Helper functions for parsing markdown
+def extract_markdown_section(text, header):
+    """Extract content after a markdown header"""
+    if f'**{header}:**' in text:
+        return text.split(f'**{header}:**')[1].split('\n')[0].strip()
+    return ''
+
+def extract_list_items(text, header):
+    """Extract markdown list items after a header"""
+    if f'**{header}:**' in text:
+        section = text.split(f'**{header}:**')[1].split('\n\n')[0]
+        return [line[2:].strip() for line in section.split('\n') if line.startswith('- ')]
+    return []
 
 @app.route('/logout')
 def logout():
